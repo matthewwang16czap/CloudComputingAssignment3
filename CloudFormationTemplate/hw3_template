@@ -1,0 +1,175 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  SageMakerEndpointName:
+    Type: String
+    Default: DeployEndpoint
+    Description: 'Enter endpoint of your SakeMaker Model. Default: DeployEndpoint'
+Metadata:
+  'AWS::CloudFormation::Designer':
+    f9d24666-5ed4-450c-af15-c9e7cfa6cd16:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 250
+        'y': 230
+      z: 0
+      embeds: []
+      dependson:
+        - 11962cbb-92c0-4515-9737-91c725ee32fb
+    5d30b773-7f4a-49ea-8498-56805568f15a:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 300
+        'y': 70
+      z: 0
+      embeds: []
+    b089e617-cb6f-4b9e-bf79-04fe1998c3a4:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 470.59688545725805
+        'y': 46.99185792107775
+      z: 0
+      embeds: []
+    2db22d4c-8e58-4717-8a8a-255e1e3ff506:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 40
+        'y': 160
+      z: 0
+      embeds: []
+    8e1c86eb-259d-4314-ac08-1dde458fb53a:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 80.78623126222786
+        'y': 64.86283347156625
+      z: 0
+      embeds: []
+    11962cbb-92c0-4515-9737-91c725ee32fb:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 406.48993493668667
+        'y': 221.37270435227043
+      z: 0
+      embeds: []
+      dependson:
+        - 5d30b773-7f4a-49ea-8498-56805568f15a
+    d7b4e093-c9c0-4deb-9d86-461e08d7b773:
+      source:
+        id: f9d24666-5ed4-450c-af15-c9e7cfa6cd16
+      target:
+        id: 11962cbb-92c0-4515-9737-91c725ee32fb
+      z: 11
+Resources:
+  TrainingData:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: ses-bucket-nishi-sihan
+      AccessControl: PublicReadWrite
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: 's3:ObjectCreated:*'
+            Function: !GetAtt 
+              - EmailSpamLambda
+              - Arn
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: f9d24666-5ed4-450c-af15-c9e7cfa6cd16
+    DeletionPolicy: Delete
+    DependsOn:
+      - EmailLambdaPermission
+  EmailSpamLambda:
+    Type: 'AWS::Lambda::Function'
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 5d30b773-7f4a-49ea-8498-56805568f15a
+    Properties:
+      FunctionName: email-spam-lambda
+      Runtime: python3.9
+      MemorySize: 512
+      Timeout: 30
+      Handler: index.lambda_handler
+      Environment:
+        Variables:
+          SageMakerEndpointName: !Ref SageMakerEndpointName
+      Role: !GetAtt 
+        - EmailSpamLambdaRole
+        - Arn
+      Layers:
+        - 'arn:aws:lambda:us-east-1:770693421928:layer:Klayers-p39-numpy:9'
+        - >-
+          arn:aws:lambda:us-east-1:770693421928:layer:Klayers-p39-beautifulsoup4:2
+      Code:
+        ZipFile: "import os\nimport io\nimport json\nimport logging\nimport boto3\nimport email\nimport urllib.parse\nimport datetime\nfrom botocore.exceptions import ClientError\nfrom bs4 import BeautifulSoup\nimport string\nimport sys\nimport numpy as np\nfrom hashlib import md5\nif sys.version_info < (3,):\n    maketrans = string.maketrans\nelse:\n    maketrans = str.maketrans\n\nlogger = logging.getLogger()\nlogger.setLevel(logging.INFO)\n\ns3 = boto3.client('s3')\n\ndef one_hot(text, n, filters='!\"#$%&()*+,-./:;<=>?@[\\\\]^_`{|}~\\t\\n', lower=True, split=' '):\n    return hashing_trick(text, n, hash_function='md5', filters=filters, lower=lower, split=split)\n    \ndef hashing_trick(text, n, hash_function=None, filters='!\"#$%&()*+,-./:;<=>?@[\\\\]^_`{|}~\\t\\n', lower=True, split=' '):\n    if hash_function is None:\n        hash_function = hash\n    elif hash_function == 'md5':\n        hash_function = lambda w: int(md5(w.encode()).hexdigest(), 16)\n\n    seq = text_to_word_sequence(text, filters=filters, lower=lower, split=split)\n    return [int(hash_function(w) % (n - 1) + 1) for w in seq]\n    \ndef text_to_word_sequence(text, filters='!\"#$%&()*+,-./:;<=>?@[\\\\]^_`{|}~\\t\\n', lower=True, split=\" \"):\n    if lower:\n        text = text.lower()\n\n    if sys.version_info < (3,):\n        if isinstance(text, unicode):\n            translate_map = dict((ord(c), unicode(split)) for c in filters)\n            text = text.translate(translate_map)\n        elif len(split) == 1:\n            translate_map = maketrans(filters, split * len(filters))\n            text = text.translate(translate_map)\n        else:\n            for c in filters:\n                text = text.replace(c, split)\n    else:\n        translate_dict = dict((c, split) for c in filters)\n        translate_map = maketrans(translate_dict)\n        text = text.translate(translate_map)\n\n    seq = text.split(split)\n    return [i for i in seq if i]\n    \ndef vectorize_sequences(sequences, vocabulary_length):\n    results = np.zeros((len(sequences), vocabulary_length))\n    for i, sequence in enumerate(sequences):\n       results[i, sequence] = 1. \n    return results\n\ndef one_hot_encode(messages, vocabulary_length):\n    data = []\n    for msg in messages:\n        temp = one_hot(msg, vocabulary_length)\n        data.append(temp)\n    return data\n    \ndef lambda_handler(event, context):\n  \n    logger.info('printing event')\n    logger.info(event)\n  \n    bucket = event['Records'][0]['s3']['bucket']['name']\n    print(\"bucket  \", bucket)\n    key = urllib.parse.unquote_plus(event['Records'][0]['s3']['object']['key'], encoding='utf-8')\n    print(\"key  \", key)\n    data = s3.get_object(Bucket=bucket,Key= key)\n    contents = data['Body'].read()\n    msg = email.message_from_bytes(contents)\n  \n\n    ENDPOINT_NAME = os.environ['SageMakerEndpointName']\n    runtime= boto3.client('runtime.sagemaker')   \n    \n    payload = \"\"\n    \n    if msg.is_multipart():\n        for part in msg.walk():\n            ctype = part.get_content_type()\n            cdispo = str(part.get('Content-Disposition'))\n            if ctype == \"text/plain\" and \"attachment\" not in cdispo:\n                payload = part.get_payload(decode=True).decode(\"utf-8\")\n            elif ctype == \"text/html\" and \"attachment\" not in cdispo:\n                payload = part.get_payload(decode=True).decode(\"utf-8\")\n                soup = BeautifulSoup(payload)\n                payload = soup.get_text()\n\n            # skip attachments\n    else:\n        payload = msg.get_payload(decode=True).decode(\"utf-8\")\n        \n    payload = payload.replace('\\r\\n',' ').strip()\n    payloadtext = payload\n    \n    vocabulary_length = 9013\n    test_messages = [payload]\n    #test_messages = [\"FreeMsg: Txt: CALL to No: 86888 & claim your reward of 3 hours talk time to use from your phone now! ubscribe6GBP/ mnth inc 3hrs 16 stop?txtStop\"]\n    one_hot_test_messages = one_hot_encode(test_messages, vocabulary_length)\n    encoded_test_messages = vectorize_sequences(one_hot_test_messages, vocabulary_length)\n    payload = json.dumps(encoded_test_messages.tolist())\n    response = runtime.invoke_endpoint(EndpointName=ENDPOINT_NAME,ContentType='application/json',Body=payload)\n  \n    response_body = response['Body'].read().decode('utf-8')\n    result = json.loads(response_body)\n    print(result)\n    pred = int(result['predicted_label'][0][0])\n    if pred == 1:\n        CLASSIFICATION = \"SPAM\"\n    elif pred == 0:\n        CLASSIFICATION = \"NOT SPAM\"\n    CLASSIFICATION_CONFIDENCE_SCORE = str(float(result['predicted_probability'][0][0]) * 100)\n  \n    #########################################################################################################\n    SENDER = \"test1@nishisihancloud.tech\"\n    RECIPIENT = msg['From']\n    EMAIL_RECEIVE_DATE = msg[\"Date\"]\n    EMAIL_SUBJECT = msg[\"Subject\"]\n    payloadtext = payloadtext[:240]\n    EMAIL_BODY = payloadtext\n    AWS_REGION = \"us-east-1\"\n\n    # The email to send.\n    SUBJECT = \"Homework Assignment 3\"\n    BODY_TEXT = \"We received your email sent at \" + EMAIL_RECEIVE_DATE + \" with the subject \" + EMAIL_SUBJECT + \".\\r\\nHere is a 240 character sample of the email body:\\r\\n\" + EMAIL_BODY + \"\\r\\nThe email was categorized as \" + CLASSIFICATION + \" with a \" + CLASSIFICATION_CONFIDENCE_SCORE + \"% confidence.\"\n    CHARSET = \"UTF-8\"\n    client = boto3.client('ses',region_name=AWS_REGION)\n    \n    # Try to send the email.\n    try:\n        #Provide the contents of the email.\n        response = client.send_email(\n            Destination={\n                'ToAddresses': [\n                    RECIPIENT,\n                ],\n            }, \n            Message={\n                'Body': {\n\n                    'Text': {\n                        'Charset': CHARSET,\n                        'Data': BODY_TEXT,\n                    },\n                },\n                'Subject': {\n                    'Charset': CHARSET,\n                    'Data': SUBJECT,\n                },\n            },\n            Source=SENDER,\n            \n        )\n    # Display an error if something goes wrong.\t\n    except ClientError as e:\n        print(e.response['Error']['Message'])\n    else:\n        print(\"Email sent! Message ID:\"),\n        print(response['MessageId'])    \n           \n    return {\n        'statusCode': 200,\n        'body': json.dumps(BODY_TEXT)\n    }\n\n\n\n          \n"
+    DependsOn:
+      - EmailSpamLambdaRole
+    DeletionPolicy: Delete
+  EmailSpamLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: b089e617-cb6f-4b9e-bf79-04fe1998c3a4
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AWSLambdaExecute'
+        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonSESFullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonSageMakerFullAccess'
+    DeletionPolicy: Delete
+  RuleSet:
+    Type: 'AWS::SES::ReceiptRuleSet'
+    Properties:
+      RuleSetName: ses-rule-set
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 8e1c86eb-259d-4314-ac08-1dde458fb53a
+    DeletionPolicy: Delete
+  EmailRule:
+    Type: 'AWS::SES::ReceiptRule'
+    Properties:
+      RuleSetName: !Ref RuleSet
+      Rule:
+        Name: spam-email
+        Enabled: true
+        ScanEnabled: true
+        Actions:
+          - S3Action:
+              BucketName: !Ref TrainingData
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 2db22d4c-8e58-4717-8a8a-255e1e3ff506
+    DependsOn:
+      - RuleSet
+      - TrainingData
+    DeletionPolicy: Delete
+  EmailLambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !Ref EmailSpamLambda
+      Action: 'lambda:InvokeFunction'
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub 'arn:aws:s3:::ses-bucket-nishi-sihan'
+      SourceAccount: !Ref 'AWS::AccountId'
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 11962cbb-92c0-4515-9737-91c725ee32fb
+    DependsOn:
+      - EmailSpamLambda
